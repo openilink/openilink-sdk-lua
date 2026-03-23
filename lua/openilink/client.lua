@@ -43,6 +43,8 @@ function Client.new(token, opts)
     routeTag = opts.routeTag or opts.route_tag,
     httpAdapter = opts.httpAdapter or opts.http_adapter or http.newCurlAdapter(),
     json = opts.json or json,
+    silkDecoder = opts.silkDecoder or opts.silk_decoder,
+    useBasenameForAttachmentName = opts.useBasenameForAttachmentName or opts.use_basename_for_attachment_name or false,
     contextTokens = {},
   }, Client)
 
@@ -63,6 +65,14 @@ end
 
 function Client:getBaseURL()
   return self.baseURL
+end
+
+function Client:setSILKDecoder(decoder)
+  self.silkDecoder = decoder
+end
+
+function Client:setUseBasenameForAttachmentName(enabled)
+  self.useBasenameForAttachmentName = not not enabled
 end
 
 function Client:_buildBaseInfo()

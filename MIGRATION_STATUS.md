@@ -19,11 +19,17 @@ Reference repository:
 - `mime.go`: done
 - `media.go`: partial
   - done: send image/video/file message builders and MIME router
+  - done: use exported constants for media types/encrypt type
+  - done: attachment filename compatibility switch (`useBasenameForAttachmentName`, default legacy)
   - gap: depends on unimplemented upload pipeline
 - `cdn.go`: not implemented
   - gap: AES-128-ECB, upload/download, key parser
-- `voice.go`: not implemented
-  - gap: SILK decode and WAV build helpers
+- `voice.go`: partial
+  - done: `BuildWAV`, `silkDecoder` option wiring, `downloadVoice` decode flow (requires `downloadFile`)
+  - gap: end-to-end voice path still blocked by CDN download/decrypt implementation
+- `types.go`: partial
+  - done: aligned exported constants for `UploadMediaType`, `EncryptType`, `VoiceFormat`, `DefaultVoiceSampleRate`
+  - gap: no strict Lua struct type layer (table-based runtime mapping)
 - `errors.go`: done
 
 ## Iteration Plan

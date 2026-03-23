@@ -2,6 +2,7 @@ local constants = require("openilink.constants")
 local errors = require("openilink.errors")
 local mime = require("openilink.mime")
 local helpers = require("openilink.helpers")
+local voice = require("openilink.voice")
 local Client = require("openilink.client")
 
 local M = {}
@@ -19,6 +20,7 @@ M.MIMEFromFilename = mime.MIMEFromFilename
 M.ExtensionFromMIME = mime.ExtensionFromMIME
 M.IsImageMIME = mime.IsImageMIME
 M.IsVideoMIME = mime.IsVideoMIME
+M.BuildWAV = voice.BuildWAV
 
 M.ErrNoContextToken = errors.ErrNoContextToken
 

@@ -12,11 +12,14 @@ This first iteration ports the core bot workflow:
 - Config and typing (`getConfig`, `sendTyping`)
 - MIME helper and text extraction helper
 - Media message builders (`sendImage`, `sendVideo`, `sendFileAttachment`, `sendMediaFile`)
+- Voice/WAV helper (`BuildWAV`) and decoder hook (`silkDecoder`, `downloadVoice`)
+- Constant parity additions (`Media*`, `EncryptAES128ECB`, `VoiceFormat*`)
+- Attachment filename mode: default keeps legacy `file_name`; opt-in basename via `useBasenameForAttachmentName = true`
 
 Not implemented yet in iteration 1:
 
 - CDN upload/download encryption pipeline
-- Voice decode (SILK to WAV)
+- End-to-end voice download/decrypt pipeline (depends on CDN implementation)
 
 ## Directory Layout
 
@@ -50,6 +53,7 @@ You can inject your own adapter with the same interface:
 
 ```lua
 local client = ilink.newClient("token", {
+  useBasenameForAttachmentName = true, -- optional: align with Go basename behavior
   httpAdapter = {
     request = function(_, opts)
       -- return { status = 200, body = "{}", headers = {} }, nil

@@ -3,6 +3,9 @@ package.path = "./lua/?.lua;./lua/?/init.lua;" .. package.path
 local tests = {
   "tests/json_spec",
   "tests/client_spec",
+  "tests/constants_spec",
+  "tests/media_spec",
+  "tests/voice_spec",
 }
 
 for _, mod in ipairs(tests) do
