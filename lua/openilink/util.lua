@@ -1,6 +1,11 @@
 local M = {}
 
 local b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local b64lookup = {}
+
+for i = 1, #b64chars do
+  b64lookup[b64chars:sub(i, i)] = i - 1
+end
 
 function M.ensureTrailingSlash(u)
   if u:sub(-1) == "/" then
@@ -23,6 +28,27 @@ end
 
 function M.shellQuote(s)
   return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
+end
+
+function M.parseExecResult(ok, why, code)
+  if ok == true then
+    return 0
+  end
+  if type(ok) == "number" then
+    if ok > 255 then
+      return math.floor(ok / 256)
+    end
+    return ok
+  end
+  if type(code) == "number" then
+    return code
+  end
+  return 1
+end
+
+function M.commandExists(name)
+  local ok, why, code = os.execute("command -v " .. tostring(name) .. " >/dev/null 2>&1")
+  return M.parseExecResult(ok, why, code) == 0
 end
 
 function M.readFile(path, mode)
@@ -82,6 +108,20 @@ function M.hexEncode(bytes)
   end))
 end
 
+function M.hexDecode(hex)
+  hex = tostring(hex or "")
+  if #hex % 2 ~= 0 or hex:find("[^0-9a-fA-F]") then
+    return nil, "invalid hex"
+  end
+
+  local out = {}
+  for i = 1, #hex, 2 do
+    local byte = tonumber(hex:sub(i, i + 1), 16)
+    out[#out + 1] = string.char(byte)
+  end
+  return table.concat(out), nil
+end
+
 function M.base64Encode(data)
   local out = {}
   local len = #data
@@ -119,6 +159,46 @@ function M.base64Encode(data)
   return table.concat(out)
 end
 
+function M.base64DecodeFlexible(data)
+  local normalized = tostring(data or ""):gsub("%s+", ""):gsub("%-", "+"):gsub("_", "/")
+  local remainder = #normalized % 4
+
+  if remainder == 1 then
+    return nil, "invalid base64 length"
+  end
+  if remainder > 0 then
+    normalized = normalized .. string.rep("=", 4 - remainder)
+  end
+
+  local out = {}
+  for i = 1, #normalized, 4 do
+    local c1 = normalized:sub(i, i)
+    local c2 = normalized:sub(i + 1, i + 1)
+    local c3 = normalized:sub(i + 2, i + 2)
+    local c4 = normalized:sub(i + 3, i + 3)
+
+    local v1 = b64lookup[c1]
+    local v2 = b64lookup[c2]
+    local v3 = c3 == "=" and 0 or b64lookup[c3]
+    local v4 = c4 == "=" and 0 or b64lookup[c4]
+
+    if v1 == nil or v2 == nil or (c3 ~= "=" and v3 == nil) or (c4 ~= "=" and v4 == nil) then
+      return nil, "invalid base64 character"
+    end
+
+    local n = v1 * 262144 + v2 * 4096 + v3 * 64 + v4
+    out[#out + 1] = string.char(math.floor(n / 65536) % 256)
+    if c3 ~= "=" then
+      out[#out + 1] = string.char(math.floor(n / 256) % 256)
+    end
+    if c4 ~= "=" then
+      out[#out + 1] = string.char(n % 256)
+    end
+  end
+
+  return table.concat(out), nil
+end
+
 function M.randomWechatUIN()
   local bytes = M.randomBytes(4)
   local n = 0
@@ -133,7 +213,76 @@ function M.nowUnixMs()
 end
 
 function M.generateClientID()
-  return string.format("sdk-%d-%s", M.nowUnixMs(), M.hexEncode(M.randomBytes(4)))
+  return string.format("openclaw-weixin:%d-%s", M.nowUnixMs(), M.hexEncode(M.randomBytes(4)))
+end
+
+function M.encodeClientVersion(version)
+  local major, minor, patch = tostring(version or ""):match("^(%d+)%.(%d+)%.(%d+)$")
+  major = tonumber(major) or 0
+  minor = tonumber(minor) or 0
+  patch = tonumber(patch) or 0
+  return major * 65536 + minor * 256 + patch
+end
+
+function M.trimString(value)
+  return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+function M.basename(path)
+  local normalized = tostring(path or ""):gsub("[/\\]+$", "")
+  if normalized == "" then
+    return ""
+  end
+  local name = normalized:match("([^/\\]+)$")
+  return name or normalized
+end
+
+function M.md5Hex(data)
+  local inputFile = os.tmpname()
+  local outputFile = os.tmpname()
+  local stderrFile = os.tmpname()
+
+  local ok, writeErr = M.writeFile(inputFile, data or "", "wb")
+  if not ok then
+    M.removeFile(inputFile)
+    M.removeFile(outputFile)
+    M.removeFile(stderrFile)
+    return nil, "write md5 input failed: " .. tostring(writeErr)
+  end
+
+  if not M.commandExists("md5sum") then
+    M.removeFile(inputFile)
+    M.removeFile(outputFile)
+    M.removeFile(stderrFile)
+    return nil, "md5sum is not available in PATH"
+  end
+
+  local command = string.format(
+    "md5sum %s >%s 2>%s",
+    M.shellQuote(inputFile),
+    M.shellQuote(outputFile),
+    M.shellQuote(stderrFile)
+  )
+  local execOk, why, code = os.execute(command)
+  local exitCode = M.parseExecResult(execOk, why, code)
+
+  local output = M.readFile(outputFile, "rb") or ""
+  local stderr = M.readFile(stderrFile, "rb") or ""
+
+  M.removeFile(inputFile)
+  M.removeFile(outputFile)
+  M.removeFile(stderrFile)
+
+  if exitCode ~= 0 then
+    return nil, string.format("md5sum exit=%d stderr=%s", exitCode, stderr:gsub("%s+$", ""))
+  end
+
+  local digest = output:match("^([0-9a-fA-F]+)")
+  if not digest or #digest ~= 32 then
+    return nil, "unexpected md5sum output"
+  end
+
+  return digest:lower(), nil
 end
 
 function M.sleepSeconds(seconds)

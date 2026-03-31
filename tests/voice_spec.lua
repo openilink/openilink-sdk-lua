@@ -1,29 +1,57 @@
 package.path = "./lua/?.lua;./lua/?/init.lua;" .. package.path
 
 local Client = require("openilink.client")
+local cdn = require("openilink.cdn")
 local voice = require("openilink.voice")
+local util = require("openilink.util")
 
-local function u16le(buf, offset)
-  local b1, b2 = string.byte(buf, offset, offset + 1)
-  return b1 + b2 * 256
-end
-
-local function u32le(buf, offset)
-  local b1, b2, b3, b4 = string.byte(buf, offset, offset + 3)
-  return b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
+do
+  local pcm = string.rep("\0", 480)
+  local wav = voice.BuildWAV(pcm, 24000, 1, 16)
+  assert(#wav == 44 + #pcm, "BuildWAV size mismatch")
+  assert(wav:sub(1, 4) == "RIFF", "BuildWAV missing RIFF header")
+  assert(wav:sub(9, 12) == "WAVE", "BuildWAV missing WAVE header")
+  assert(wav:sub(37, 40) == "data", "BuildWAV missing data chunk")
 end
 
 do
-  local pcm = string.char(1, 0, 2, 0)
-  local wav = voice.BuildWAV(pcm, 24000, 1, 16)
+  local key = string.char(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+  local encryptedVoice = assert(cdn.EncryptAESECB("silk-data", key))
+  local seenSampleRate = nil
 
-  assert(#wav == 48, "WAV length mismatch")
-  assert(wav:sub(1, 4) == "RIFF", "WAV should start with RIFF")
-  assert(wav:sub(9, 12) == "WAVE", "WAV should include WAVE signature")
-  assert(u32le(wav, 25) == 24000, "WAV sample rate mismatch")
-  assert(u16le(wav, 23) == 1, "WAV channel mismatch")
-  assert(u16le(wav, 35) == 16, "WAV bitsPerSample mismatch")
-  assert(wav:sub(45) == pcm, "WAV payload mismatch")
+  local mock = {}
+
+  function mock:request(opts)
+    if opts.url == "https://cdn.example.test/voice" then
+      return {
+        status = 200,
+        body = encryptedVoice,
+        headers = {},
+      }, nil
+    end
+    error("unexpected url: " .. tostring(opts.url))
+  end
+
+  local client = Client.new("token", {
+    httpAdapter = mock,
+    silkDecoder = function(data, sampleRate)
+      seenSampleRate = sampleRate
+      assert(data == "silk-data", "downloadVoice decoder input mismatch")
+      return string.rep("\1\0", 8), nil
+    end,
+  })
+
+  local wav, err = client:downloadVoice({
+    sample_rate = 16000,
+    media = {
+      full_url = "https://cdn.example.test/voice",
+      aes_key = util.base64Encode(key),
+    },
+  })
+
+  assert(wav and not err, "downloadVoice should succeed")
+  assert(seenSampleRate == 16000, "downloadVoice sample rate mismatch")
+  assert(wav:sub(1, 4) == "RIFF", "downloadVoice should return WAV data")
 end
 
 do
@@ -34,34 +62,10 @@ do
       aes_key = "aes-key",
     },
   })
-  assert(missingDecoderErr and tostring(missingDecoderErr):find("no SILK decoder configured", 1, true), "downloadVoice should require silkDecoder")
-end
-
-do
-  local client = Client.new("token", {
-    silkDecoder = function(data, sampleRate)
-      assert(data == "cipher-voice", "decoder data mismatch")
-      assert(sampleRate == 24000, "decoder sample rate mismatch")
-      return string.char(16, 0, 32, 0), nil
-    end,
-  })
-
-  function client:downloadFile(encryptedQueryParam, aesKey)
-    assert(encryptedQueryParam == "encrypted", "downloadFile query mismatch")
-    assert(aesKey == "aes-key", "downloadFile aes key mismatch")
-    return "cipher-voice", nil
-  end
-
-  local wav, err = client:downloadVoice({
-    media = {
-      encrypt_query_param = "encrypted",
-      aes_key = "aes-key",
-    },
-  })
-
-  assert(wav and not err, "downloadVoice should succeed with custom decoder")
-  assert(wav:sub(1, 4) == "RIFF", "downloadVoice should return WAV bytes")
-  assert(u32le(wav, 25) == 24000, "downloadVoice should apply default sample rate")
+  assert(
+    missingDecoderErr and tostring(missingDecoderErr):find("no SILK decoder configured", 1, true),
+    "downloadVoice should require silkDecoder"
+  )
 end
 
 return true

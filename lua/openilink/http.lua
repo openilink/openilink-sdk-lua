@@ -3,22 +3,6 @@ local errors = require("openilink.errors")
 
 local M = {}
 
-local function parseExecResult(ok, why, code)
-  if ok == true then
-    return 0
-  end
-  if type(ok) == "number" then
-    if ok > 255 then
-      return math.floor(ok / 256)
-    end
-    return ok
-  end
-  if type(code) == "number" then
-    return code
-  end
-  return 1
-end
-
 local function parseHeaders(raw)
   local blocks = {}
   local current = nil
@@ -95,7 +79,7 @@ function CurlAdapter:request(opts)
   local command = table.concat(cmdParts, " ") .. " 2>" .. util.shellQuote(stderrFile)
 
   local ok, why, code = os.execute(command)
-  local exitCode = parseExecResult(ok, why, code)
+  local exitCode = util.parseExecResult(ok, why, code)
 
   local headerRaw = util.readFile(responseHeaderFile, "rb") or ""
   local body = util.readFile(responseBodyFile, "rb") or ""

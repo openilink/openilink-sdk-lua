@@ -1,6 +1,7 @@
 package.path = "./lua/?.lua;./lua/?/init.lua;" .. package.path
 
 local Client = require("openilink.client")
+local json = require("openilink.json")
 
 local mock = { calls = {} }
 
@@ -29,6 +30,15 @@ local client = Client.new("test-token", {
 
 local clientID, sendErr = client:sendText("userA", "hello", "ctx-1")
 assert(clientID and not sendErr, "sendText should succeed")
+assert(clientID:match("^openclaw%-weixin:%d+%-%x+$"), "client ID prefix mismatch")
+
+local sendCall = mock.calls[1]
+assert(sendCall.headers["iLink-App-Id"] == "bot", "common app id header mismatch")
+assert(sendCall.headers["iLink-App-ClientVersion"] == "131329", "client version header mismatch")
+
+local sendBody = json.decode(sendCall.body)
+assert(sendBody.base_info.channel_version == "2.1.1", "sendText channel version mismatch")
+assert(sendBody.msg.context_token == "ctx-1", "sendText context token mismatch")
 
 local pushID, pushErr = client:push("userA", "hi")
 assert(pushID == nil and pushErr, "push without context token should fail")

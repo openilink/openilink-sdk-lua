@@ -33,17 +33,19 @@ end
 
 function Client.new(token, opts)
   opts = opts or {}
+  local baseURL = opts.baseURL or opts.base_url or constants.DefaultBaseURL
 
   local self = setmetatable({
-    baseURL = opts.baseURL or opts.base_url or constants.DefaultBaseURL,
+    baseURL = baseURL,
     cdnBaseURL = opts.cdnBaseURL or opts.cdn_base_url or constants.DefaultCDNBaseURL,
+    loginBaseURL = opts.loginBaseURL or opts.login_base_url or baseURL,
     token = token or "",
     botType = opts.botType or opts.bot_type or constants.DefaultBotType,
     version = opts.version or constants.DefaultVersion,
     routeTag = opts.routeTag or opts.route_tag,
     httpAdapter = opts.httpAdapter or opts.http_adapter or http.newCurlAdapter(),
-    json = opts.json or json,
     silkDecoder = opts.silkDecoder or opts.silk_decoder,
+    json = opts.json or json,
     useBasenameForAttachmentName = opts.useBasenameForAttachmentName or opts.use_basename_for_attachment_name or false,
     contextTokens = {},
   }, Client)
@@ -79,6 +81,19 @@ function Client:_buildBaseInfo()
   return { channel_version = self.version }
 end
 
+function Client:_commonHeaders()
+  local headers = {
+    ["iLink-App-Id"] = constants.ILinkAppID,
+    ["iLink-App-ClientVersion"] = tostring(util.encodeClientVersion(self.version)),
+  }
+
+  if self.routeTag and self.routeTag ~= "" then
+    headers["SKRouteTag"] = self.routeTag
+  end
+
+  return headers
+end
+
 function Client:_buildHeaders(body)
   local headers = {
     ["Content-Type"] = "application/json",
@@ -87,21 +102,15 @@ function Client:_buildHeaders(body)
     ["X-WECHAT-UIN"] = util.randomWechatUIN(),
   }
 
-  if self.token and self.token ~= "" then
-    headers["Authorization"] = "Bearer " .. self.token
-  end
-  if self.routeTag and self.routeTag ~= "" then
-    headers["SKRouteTag"] = self.routeTag
+  for key, value in pairs(self:_commonHeaders()) do
+    headers[key] = value
   end
 
-  return headers
-end
-
-function Client:_routeTagHeaders()
-  local headers = {}
-  if self.routeTag and self.routeTag ~= "" then
-    headers["SKRouteTag"] = self.routeTag
+  local token = util.trimString(self.token)
+  if token ~= "" then
+    headers["Authorization"] = "Bearer " .. token
   end
+
   return headers
 end
 
@@ -137,10 +146,15 @@ function Client:_doPost(endpoint, bodyTable, timeoutMs)
 end
 
 function Client:_doGet(url, headers, timeoutMs)
+  local mergedHeaders = self:_commonHeaders()
+  for key, value in pairs(headers or {}) do
+    mergedHeaders[key] = value
+  end
+
   local resp, err = self.httpAdapter:request({
     method = "GET",
     url = url,
-    headers = headers or {},
+    headers = mergedHeaders,
     timeoutMs = timeoutMs,
   })
   if not resp then
@@ -300,33 +314,27 @@ function Client:getUploadURL(req)
   return decoded, nil
 end
 
-function Client:fetchQRCode()
+function Client:fetchQRCode(baseURL)
   local botType = self.botType
   if not botType or botType == "" then
     botType = constants.DefaultBotType
   end
 
-  local url = util.joinURL(self.baseURL, "ilink/bot/get_bot_qrcode") .. "?bot_type=" .. util.urlEncode(botType)
-  local headers = self:_routeTagHeaders()
+  local url = util.joinURL(baseURL or self.baseURL, "ilink/bot/get_bot_qrcode") .. "?bot_type=" .. util.urlEncode(botType)
 
-  local data, err = self:_doGet(url, headers, constants.DefaultAPITimeoutMs)
+  local data, err = self:_doGet(url, nil, 5000)
   if not data then
     return nil, err
   end
   return self:_decodeJSON(data, "fetchQRCode")
 end
 
-function Client:pollQRStatus(qrcode)
-  local url = util.joinURL(self.baseURL, "ilink/bot/get_qrcode_status") .. "?qrcode=" .. util.urlEncode(qrcode)
-  local headers = self:_routeTagHeaders()
-  headers["iLink-App-ClientVersion"] = "1"
+function Client:pollQRStatus(qrcode, baseURL)
+  local url = util.joinURL(baseURL or self.baseURL, "ilink/bot/get_qrcode_status") .. "?qrcode=" .. util.urlEncode(qrcode)
 
-  local data, err = self:_doGet(url, headers, constants.QRLongPollTimeoutMs)
+  local data, err = self:_doGet(url, nil, constants.QRLongPollTimeoutMs)
   if not data then
-    if err and err.kind == "TimeoutError" then
-      return { status = "wait" }, nil
-    end
-    return nil, err
+    return { status = "wait" }, nil
   end
   return self:_decodeJSON(data, "pollQRStatus")
 end
@@ -337,8 +345,9 @@ function Client:loginWithQR(callbacks, opts)
 
   local timeoutSec = opts.timeoutSec or opts.timeout_sec or constants.DefaultLoginTimeoutSec
   local start = os.time()
+  local qrBaseURL = self.loginBaseURL or self.baseURL
 
-  local qr, err = self:fetchQRCode()
+  local qr, err = self:fetchQRCode(qrBaseURL)
   if not qr then
     return nil, err
   end
@@ -348,9 +357,10 @@ function Client:loginWithQR(callbacks, opts)
   local scannedNotified = false
   local refreshCount = 1
   local currentQR = qr.qrcode
+  local pollBaseURL = qrBaseURL
 
   while (os.time() - start) < timeoutSec do
-    local status, pollErr = self:pollQRStatus(currentQR)
+    local status, pollErr = self:pollQRStatus(currentQR, pollBaseURL)
     if not status then
       return nil, pollErr
     end
@@ -362,6 +372,10 @@ function Client:loginWithQR(callbacks, opts)
         scannedNotified = true
         callCallback(callbacks, "onScanned", "OnScanned")
       end
+    elseif status.status == "scaned_but_redirect" then
+      if status.redirect_host and status.redirect_host ~= "" then
+        pollBaseURL = "https://" .. status.redirect_host
+      end
     elseif status.status == "expired" then
       refreshCount = refreshCount + 1
       if refreshCount > constants.MaxQRRefreshCount then
@@ -372,7 +386,7 @@ function Client:loginWithQR(callbacks, opts)
       end
 
       callCallback(callbacks, "onExpired", "OnExpired", refreshCount, constants.MaxQRRefreshCount)
-      local newQR, qrErr = self:fetchQRCode()
+      local newQR, qrErr = self:fetchQRCode(qrBaseURL)
       if not newQR then
         return nil, qrErr
       end

@@ -5,6 +5,8 @@ local tests = {
   "tests/client_spec",
   "tests/constants_spec",
   "tests/media_spec",
+  "tests/auth_spec",
+  "tests/cdn_spec",
   "tests/voice_spec",
 }
 
